@@ -693,6 +693,7 @@ vAPI.injectScriptlet = function(doc, text) {
                     [ ':nth-ancestor', PSelectorUpwardTask ],
                     [ ':remove', PSelectorPassthru ],
                     [ ':spath', PSelectorSpathTask ],
+                    [ ':style', PSelectorPassthru ],
                     [ ':upward', PSelectorUpwardTask ],
                     [ ':watch-attr', PSelectorWatchAttrs ],
                     [ ':xpath', PSelectorXpathTask ],
@@ -714,6 +715,9 @@ vAPI.injectScriptlet = function(doc, text) {
             }
             if ( o.action !== undefined ) {
                 this.action = o.action;
+            }
+            if ( o.action === 'style' ) {
+                this.style = tasks[tasks.length - 1][1];
             }
         }
         prime(input) {
@@ -751,6 +755,7 @@ vAPI.injectScriptlet = function(doc, text) {
         }
     };
     PSelector.prototype.action = undefined;
+    PSelector.prototype.style = undefined;
     PSelector.prototype.hit = false;
     PSelector.prototype.operatorToTaskMap = undefined;
 
@@ -762,6 +767,7 @@ vAPI.injectScriptlet = function(doc, text) {
             this.mustApplySelectors = false;
             this.selectors = new Map();
             this.hiddenNodes = new Set();
+            this.styledNodes = new Map();
             if ( vAPI.domWatcher instanceof Object ) {
                 vAPI.domWatcher.addListener(this);
             }
@@ -773,7 +779,7 @@ vAPI.injectScriptlet = function(doc, text) {
             for ( let i = 0, n = aa.length; i < n; i++ ) {
                 const raw = aa[i];
                 const o = JSON.parse(raw);
-                if ( o.action === 'style' ) {
+                if ( o.action === 'style' && o.tasks.length === 1 ) {
                     this.domFilterer.addCSSRule(o.selector, o.tasks[0][1]);
                     mustCommit = true;
                     continue;
@@ -791,6 +797,9 @@ vAPI.injectScriptlet = function(doc, text) {
                         const pselector = new PSelector(o);
                         this.selectors.set(raw, pselector);
                         addedSelectors.push(pselector);
+                        if ( o.action === 'style' ) {
+                            this.styledNodes.set(o.tasks[o.tasks.length - 1][1], new Set());
+                        }
                         mustCommit = true;
                     }
                     continue;
@@ -820,6 +829,8 @@ vAPI.injectScriptlet = function(doc, text) {
             //   the procedural selectors.
             const toRemove = this.hiddenNodes;
             this.hiddenNodes = new Set();
+            const toUnStyle = this.styledNodes;
+            this.styledNodes = new Map(Array.from(toUnStyle.keys(), k => [k, new Set()]));
 
             let t0 = Date.now();
 
@@ -843,6 +854,9 @@ vAPI.injectScriptlet = function(doc, text) {
                 pselector.hit = true;
                 if ( pselector.action === 'remove' ) {
                     this.removeNodes(nodes);
+                } else if ( pselector.action === 'style' ) {
+                    const style = pselector.style;
+                    this.styleNodes(nodes, style);
                 } else {
                     this.hideNodes(nodes);
                 }
@@ -852,7 +866,24 @@ vAPI.injectScriptlet = function(doc, text) {
                 if ( this.hiddenNodes.has(node) ) { continue; }
                 this.domFilterer.unhideNode(node);
             }
+
+            toUnStyle.forEach((nodes, style) => {
+                const styledNodes = this.styledNodes.get(style);
+                for ( const node of nodes ) {
+                    if ( styledNodes.has(node) ) { continue; }
+                    this.domFilterer.unstyleNode(node, style);
+                }
+            });
             //console.timeEnd('procedural selectors/dom layout changed');
+        }
+
+        styleNodes(nodes, style) {
+            const styledNodes = this.styledNodes.get(style);
+            for ( const node of nodes) {
+                if ( node.parentElement === null ) { continue; }
+                this.domFilterer.styleNode(node, style);
+                styledNodes.add(node);
+            }
         }
 
         hideNodes(nodes) {
@@ -906,6 +937,8 @@ vAPI.injectScriptlet = function(doc, text) {
             this.proceduralFilterer = null;
             this.hideNodeAttr = undefined;
             this.hideNodeStyleSheetInjected = false;
+            this.proceduralStyles = new Map();
+            this.proceduralStylesInjected = new Set();
             // https://github.com/uBlockOrigin/uBlock-issues/issues/167
             //   By the time the DOMContentLoaded is fired, the content script might
             //   have been disconnected from the background page. Unclear why this
@@ -981,6 +1014,7 @@ vAPI.injectScriptlet = function(doc, text) {
         excludeNode(node) {
             this.excludedNodeSet.add(node);
             this.unhideNode(node);
+            this.removeAllStyles(node);
         }
 
         unexcludeNode(node) {
@@ -1003,6 +1037,40 @@ vAPI.injectScriptlet = function(doc, text) {
         unhideNode(node) {
             if ( this.hideNodeAttr === undefined ) { return; }
             node.removeAttribute(this.hideNodeAttr);
+        }
+
+        randomAlphaToken() {
+            const now = Date.now();
+            return String.fromCharCode(now % 26 + 97) +
+                   Math.floor((1 + Math.random()) * now).toString(36);
+        };
+
+        styleNode(node, style) {
+            if ( this.excludedNodeSet.has(node) ) { return; }
+            let styleAttribute;
+            if ( !this.proceduralStyles.has(style) ) { 
+                styleAttribute = this.randomAlphaToken();
+                this.proceduralStyles.set(style, styleAttribute);
+            } else {
+                styleAttribute = this.proceduralStyles.get(style);
+            }
+            node.setAttribute(styleAttribute, '');
+            if ( this.proceduralStylesInjected.has(styleAttribute) ) { return; }
+            this.proceduralStylesInjected.add(styleAttribute);
+            this.addCSSRule(
+                `[${styleAttribute}]`,
+                style,
+                { silent: true }
+            );
+        }
+
+        unstyleNode(node, style) {
+            if ( !this.proceduralStyles.has(style) ) { return; }
+            node.removeAttribute(this.proceduralStyles.get(style));
+        }
+
+        removeAllStyles(node) {
+            this.proceduralStyles.forEach((style, _) => node.removeAttribute(style));
         }
 
         toggle(state, callback) {
