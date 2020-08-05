@@ -748,11 +748,17 @@ const filterToDOMInterface = (( ) => {
         let elems;
         try {
             const o = JSON.parse(raw);
-            if ( o.action === 'style' ) {
+            // style, non-procedural selector
+            if ( o.action === 'style' && o.tasks.length === 1 ) {
                 elems = document.querySelectorAll(
                     o.selector.replace(rePseudoElements, '')
                 );
-                lastAction = o.selector + ' {' + o.tasks[0][1] + '}';
+                lastAction = ['nonproc', o.selector + ' {' + o.tasks[0][1] + '}'];
+            // style, procedural selector
+            } else if ( o.action === 'style' && o.tasks.length > 1 ) {
+                elems = vAPI.domFilterer.createProceduralFilter(o).exec();
+                lastAction = ['proc', o.tasks[o.tasks.length - 1][1]];
+            // non-style, procedural selector
             } else if ( o.tasks ) {
                 elems = vAPI.domFilterer.createProceduralFilter(o).exec();
             }
@@ -813,7 +819,7 @@ const filterToDOMInterface = (( ) => {
 
     // https://github.com/gorhill/uBlock/issues/1629
     //   Avoid hiding the element picker's related elements.
-    const applyHide = function() {
+    const applyDomFilterer = function(domFiltererFunction) {
         const htmlElem = document.documentElement;
         for ( const item of lastResultset ) {
             const elem = item.elem;
@@ -822,7 +828,7 @@ const filterToDOMInterface = (( ) => {
                 (elem !== htmlElem) &&
                 (item.type === 'cosmetic' || item.type === 'network' && item.src !== undefined)
             ) {
-                vAPI.domFilterer.hideNode(elem);
+                domFiltererFunction(elem);
                 item.hidden = true;
             }
             if ( item.type === 'network' && item.style === 'background-image' ) {
@@ -834,11 +840,11 @@ const filterToDOMInterface = (( ) => {
         }
     };
 
-    const unapplyHide = function() {
+    const unapplyDomFilterer = function(domFiltererFunction) {
         if ( lastResultset === undefined ) { return; }
         for ( const item of lastResultset ) {
             if ( item.hidden === true ) {
-                vAPI.domFilterer.unhideNode(item.elem);
+                domFiltererFunction(item.elem);
                 item.hidden = false;
             }
             if ( item.hasOwnProperty('backgroundImage') ) {
@@ -875,20 +881,30 @@ const filterToDOMInterface = (( ) => {
             unapply();
         }
         if ( lastResultset === undefined ) { return; }
-        if ( typeof lastAction === 'string' ) {
+        // non-style
+        if ( typeof lastAction === 'undefined' ) {
+            applyDomFilterer(elem => vAPI.domFilterer.hideNode(elem));
+        // style, non-procedural
+        } else if ( typeof lastAction === 'object' && lastAction[0] === 'nonproc' ) {
             applyStyle();
-        } else {
-            applyHide();
+        // style, procedural;
+        } else if ( typeof lastAction === 'object' && lastAction[0] === 'proc' ) {
+            applyDomFilterer(elem => vAPI.domFilterer.styleNode(elem, lastAction[1]));
         }
         applied = true;
     };
 
     const unapply = function() {
         if ( !applied ) { return; }
-        if ( typeof lastAction === 'string' ) {
+        // non-style
+        if ( typeof lastAction === 'undefined' ) {
+            unapplyDomFilterer(elem => vAPI.domFilterer.unhideNode(elem));
+        // style, non-procedural
+        } else if ( typeof lastAction === 'object' && lastAction[0] === 'nonproc' ) {
             unapplyStyle();
-        } else {
-            unapplyHide();
+        // style, procedural;
+        } else if ( typeof lastAction === 'object' && lastAction[0] === 'proc' ) {
+            unapplyDomFilterer(elem => vAPI.domFilterer.unstyleNode(elem, lastAction[1]));
         }
         applied = false;
     };
