@@ -929,6 +929,7 @@ vAPI.injectScriptlet = function(doc, text) {
             this.disabled = false;
             this.listeners = [];
             this.filterset = new Set();
+            this.specialAttrFilterset = new Set();
             this.excludedNodeSet = new WeakSet();
             this.addedCSSRules = new Set();
             this.exceptedCSSRules = [];
@@ -953,7 +954,7 @@ vAPI.injectScriptlet = function(doc, text) {
             }
         }
 
-        addCSSRule(selectors, declarations, details = {}) {
+        addCSSRule(selectors, declarations, details = {}, filterset = this.filterset) {
             if ( selectors === undefined ) { return; }
             const selectorsStr = Array.isArray(selectors)
                     ? selectors.join(',\n')
@@ -966,7 +967,7 @@ vAPI.injectScriptlet = function(doc, text) {
                 injected: details.injected === true
             };
             this.addedCSSRules.add(entry);
-            this.filterset.add(entry);
+            filterset.add(entry);
             if (
                 this.disabled === false &&
                 entry.lazy !== true &&
@@ -1030,7 +1031,8 @@ vAPI.injectScriptlet = function(doc, text) {
             this.addCSSRule(
                 `[${this.hideNodeAttr}]`,
                 'display:none!important;',
-                { silent: true }
+                { silent: true },
+                this.specialAttrFilterset
             );
         }
 
@@ -1060,7 +1062,8 @@ vAPI.injectScriptlet = function(doc, text) {
             this.addCSSRule(
                 `[${styleAttribute}]`,
                 style,
-                { silent: true }
+                { silent: true },
+                this.specialAttrFilterset
             );
         }
 
@@ -1094,15 +1097,14 @@ vAPI.injectScriptlet = function(doc, text) {
                 declarative: [],
                 exceptions: this.exceptedCSSRules,
             };
-            for ( const entry of this.filterset ) {
-                let selectors = entry.selectors;
-                if ( all !== true && this.hideNodeAttr !== undefined ) {
-                    selectors = selectors
-                                    .replace(`[${this.hideNodeAttr}]`, '')
-                                    .replace(/^,\n|,\n$/gm, '');
-                    if ( selectors === '' ) { continue; }
-                }
-                out.declarative.push([ selectors, entry.declarations ]);
+            let filterset;
+            if ( all ) {
+                filterset = [...this.filterset, ...this.specialAttrFilterset];
+            } else {
+                filterset = this.filterset;
+            }
+            for ( const entry of filterset ) {
+                out.declarative.push([ entry.selectors, entry.declarations ]);
             }
             return out;
         }
